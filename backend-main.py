@@ -341,28 +341,9 @@ def generate_excel(transactions: List[Dict]) -> bytes:
 
 # ============ ENDPOINTS AUTH ============
 
-@app.post("/auth/register", response_model=Token)
-async def register(user: UserRegister):
-    """Enregistrer nouvel utilisateur"""
-    if user.email in USERS_DB:
-        raise HTTPException(status_code=400, detail="Email already registered")
-    
-    USERS_DB[user.email] = {
-        "password_hash": hash_password(user.password),
-        "full_name": user.full_name,
-        "created_at": datetime.utcnow()
-    }
-    
-    token = create_access_token(user.email)
-    return {
-        "access_token": token,
-        "token_type": "bearer",
-        "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60
-    }
-
-@app.post("/auth/login", response_model=Token)
+@app.post("/auth/login")
 async def login(user: UserLogin):
-    """Connexion utilisateur"""
+    # Pas besoin de token au login
     if user.email not in USERS_DB:
         raise HTTPException(status_code=401, detail="Invalid credentials")
     
@@ -371,11 +352,22 @@ async def login(user: UserLogin):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     
     token = create_access_token(user.email)
-    return {
-        "access_token": token,
-        "token_type": "bearer",
-        "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60
+    return {"access_token": token, "token_type": "bearer", "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60}
+
+@app.post("/auth/register")
+async def register(user: UserRegister):
+    # Pas besoin de token au register
+    if user.email in USERS_DB:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    
+    USERS_DB[user.email] = {
+        "password_hash": hash_password(user.password),
+        "fullname": user.fullname,
+        "created_at": datetime.utcnow()
     }
+    
+    token = create_access_token(user.email)
+    return {"access_token": token, "token_type": "bearer", "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60}
 
 # ============ ENDPOINTS UPLOAD ============
 
