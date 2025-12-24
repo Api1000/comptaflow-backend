@@ -1,0 +1,10 @@
+.env
+.env.production
+.env.local
+__pycache__/
+*.pyc
+.venv/
+venv/
+.DS_Store
+*.xlsx
+uploads/
