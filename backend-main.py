@@ -341,7 +341,7 @@ def generate_excel(transactions: List[Dict]) -> bytes:
 
 # ============ ENDPOINTS AUTH ============
 
-@app.post("/api/auth/register", response_model=Token)
+@app.post("/auth/register", response_model=Token)
 async def register(user: UserRegister):
     """Enregistrer nouvel utilisateur"""
     if user.email in USERS_DB:
@@ -360,7 +360,7 @@ async def register(user: UserRegister):
         "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60
     }
 
-@app.post("/api/auth/login", response_model=Token)
+@app.post("/auth/login", response_model=Token)
 async def login(user: UserLogin):
     """Connexion utilisateur"""
     if user.email not in USERS_DB:
@@ -379,7 +379,7 @@ async def login(user: UserLogin):
 
 # ============ ENDPOINTS UPLOAD ============
 
-@app.post("/api/upload", response_model=UploadResponse)
+@app.post("/upload", response_model=UploadResponse)
 async def upload_pdf(file: UploadFile = File(...), token: str = None):
     """Upload et traiter PDF"""
     email = get_current_user(token)
@@ -418,7 +418,7 @@ async def upload_pdf(file: UploadFile = File(...), token: str = None):
         message=f"✅ {len(transactions)} transactions extraites de {bank_type}"
     )
 
-@app.get("/api/download/{upload_id}")
+@app.get("/download/{upload_id}")
 async def download_excel(upload_id: str, token: str = None):
     """Télécharger fichier Excel"""
     email = get_current_user(token)
@@ -435,7 +435,7 @@ async def download_excel(upload_id: str, token: str = None):
         "filename": upload["file_name"].replace('.pdf', '_EXTRAIT.xlsx')
     }
 
-@app.get("/api/history")
+@app.get("/history")
 async def get_history(token: str = None):
     """Historique des uploads"""
     email = get_current_user(token)
@@ -456,7 +456,7 @@ async def get_history(token: str = None):
 
 # ============ HEALTH CHECK ============
 
-@app.get("/api/health")
+@app.get("/health")
 async def health():
     """Health check"""
     return {"status": "ok", "version": "1.0.0"}
