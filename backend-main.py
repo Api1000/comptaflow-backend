@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, EmailStr
 from datetime import datetime, timedelta
-import jwt
+from jose import jwt
 import bcrypt
 import os
 from typing import List, Dict, Optional
