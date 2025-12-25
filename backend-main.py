@@ -7,7 +7,7 @@
 Production-ready avec Auth JWT + Upload + Processing
 """
 
-from fastapi import FastAPI, File, UploadFile, Depends, HTTPException, status
+from fastapi import FastAPI, File, UploadFile, Depends, HTTPException, status, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, EmailStr
@@ -109,11 +109,19 @@ def verify_token(token: str):
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
-def get_current_user(token: str = None):
-    """Dépendance pour vérifier l'utilisateur"""
-    if not token:
+def get_current_user(authorization: Optional[str] = Header(None)):
+    """Dépendance pour vérifier l'utilisateur depuis le header Authorization"""
+    if not authorization:
         raise HTTPException(status_code=401, detail="No token provided")
-    return verify_token(token)
+    
+    # Format: "Bearer <token>"
+    try:
+        scheme, token = authorization.split()
+        if scheme.lower() != "bearer":
+            raise HTTPException(status_code=401, detail="Invalid authentication scheme")
+        return verify_token(token)
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Invalid token format")
 
 # ============ EXTRACTION (MOTEUR PRINCIPAL) ============
 def detect_bank_format(text: str) -> str:
@@ -297,14 +305,17 @@ def generate_excel(transactions: List[Dict]) -> bytes:
 # ============ ENDPOINTS AUTH ============
 @app.post("/auth/login")
 async def login(user: UserLogin):
-    """Endpoint de connexion"""
-    # Pas besoin de token au login
+    """Endpoint de connexion - SANS token requis"""
+    # ✅ CORRECTION : Pas de token requis au login
     if user.email not in USERS_DB:
         raise HTTPException(status_code=401, detail="Invalid credentials")
+    
     stored_user = USERS_DB[user.email]
     if not verify_password(user.password, stored_user["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid credentials")
+    
     token = create_access_token(user.email)
+    
     return {
         "access_token": token,
         "token_type": "bearer",
@@ -317,8 +328,8 @@ async def login(user: UserLogin):
 
 @app.post("/auth/register")
 async def register(user: UserRegister):
-    """Endpoint d'inscription"""
-    # Pas besoin de token au register
+    """Endpoint d'inscription - SANS token requis"""
+    # ✅ CORRECTION : Pas de token requis au register
     if user.email in USERS_DB:
         raise HTTPException(status_code=400, detail="Email already registered")
     
@@ -330,7 +341,6 @@ async def register(user: UserRegister):
     
     token = create_access_token(user.email)
     
-    # ✅ CORRECTION : Retourner full_name au lieu de fullname
     return {
         "access_token": token,
         "token_type": "bearer",
@@ -343,9 +353,8 @@ async def register(user: UserRegister):
 
 # ============ ENDPOINTS UPLOAD ============
 @app.post("/upload", response_model=UploadResponse)
-async def upload_pdf(file: UploadFile = File(...), token: str = None):
-    """Upload et traiter PDF"""
-    email = get_current_user(token)
+async def upload_pdf(file: UploadFile = File(...), email: str = Depends(get_current_user)):
+    """Upload et traiter PDF - AVEC token requis"""
     if file.content_type != "application/pdf":
         raise HTTPException(status_code=400, detail="Only PDF files allowed")
     
@@ -381,9 +390,8 @@ async def upload_pdf(file: UploadFile = File(...), token: str = None):
     )
 
 @app.get("/download/{upload_id}")
-async def download_excel(upload_id: str, token: str = None):
-    """Télécharger fichier Excel"""
-    email = get_current_user(token)
+async def download_excel(upload_id: str, email: str = Depends(get_current_user)):
+    """Télécharger fichier Excel - AVEC token requis"""
     if upload_id not in UPLOADS_DB:
         raise HTTPException(status_code=404, detail="Upload not found")
     
@@ -397,9 +405,8 @@ async def download_excel(upload_id: str, token: str = None):
     }
 
 @app.get("/history")
-async def get_history(token: str = None):
-    """Historique des uploads"""
-    email = get_current_user(token)
+async def get_history(email: str = Depends(get_current_user)):
+    """Historique des uploads - AVEC token requis"""
     user_uploads = [
         {
             "id": uid,
