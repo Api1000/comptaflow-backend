@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
+
 # -*- coding: utf-8 -*-
+
 """
 🚀 PENNY LANE CONVERTER - Backend FastAPI
 Production-ready avec Auth JWT + Upload + Processing
@@ -44,7 +46,6 @@ app.add_middleware(
 )
 
 # ============ PYDANTIC MODELS ============
-
 class UserRegister(BaseModel):
     email: EmailStr
     password: str
@@ -73,12 +74,10 @@ class UploadResponse(BaseModel):
 
 # ============ SIMULATED DATABASE ============
 # En prod: remplacer par Supabase/PostgreSQL
-
 USERS_DB = {}  # {email: {password_hash, full_name}}
 UPLOADS_DB = {}  # {upload_id: {user_email, file_name, transactions, created_at}}
 
 # ============ UTILS ============
-
 def hash_password(password: str) -> str:
     """Hash password avec bcrypt"""
     salt = bcrypt.gensalt()
@@ -92,7 +91,6 @@ def create_access_token(email: str, expires_delta: Optional[timedelta] = None):
     """Créer JWT token"""
     if expires_delta is None:
         expires_delta = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    
     expire = datetime.utcnow() + expires_delta
     to_encode = {"sub": email, "exp": expire}
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
@@ -118,7 +116,6 @@ def get_current_user(token: str = None):
     return verify_token(token)
 
 # ============ EXTRACTION (MOTEUR PRINCIPAL) ============
-
 def detect_bank_format(text: str) -> str:
     """Détecte le format bancaire"""
     text_upper = text.upper()
@@ -139,30 +136,23 @@ def extract_ca_transactions(lines: List[str]) -> List[Dict]:
     """Format CA: JJ.MM COMMERCE LIEU MONTANT"""
     transactions = []
     skip_keywords = ['TOTAL', 'Date', 'Montant', 'Commerce', 'Page']
-    
     for line in lines:
         if any(skip in line for skip in skip_keywords):
             continue
-        
         date_match = re.search(r'^(\d{1,2}\.\d{2})\s+', line)
         montant_match = re.search(r'(-?\d{1,5},\d{2})$', line)
-        
         if date_match and montant_match:
             try:
                 date_str = date_match.group(1)
                 montant_str = montant_match.group(1)
-                
                 start_idx = date_match.end()
                 end_idx = montant_match.start()
                 middle_text = line[start_idx:end_idx].strip()
-                
                 if not middle_text:
                     continue
-                
                 jour, mois = date_str.split('.')
                 date_format = f"{jour}/{mois}/2025"
                 montant = float(montant_str.replace(',', '.'))
-                
                 transactions.append({
                     'Date': date_format,
                     'Libellé': middle_text,
@@ -170,34 +160,27 @@ def extract_ca_transactions(lines: List[str]) -> List[Dict]:
                 })
             except:
                 pass
-    
     return transactions
 
 def extract_bp_transactions(lines: List[str]) -> List[Dict]:
     """Format BP: JJ/MM/YY COMMERCE ADRESSE MONTANT €"""
     transactions = []
     skip_keywords = ['DATE', 'NOM', 'MONTANT', 'Page', 'TOTAL']
-    
     for line in lines:
         if any(skip in line for skip in skip_keywords):
             continue
-        
         date_match = re.match(r'^(\d{1,2})/(\d{1,2})/(\d{2})\s+', line.strip())
         montant_match = re.search(r'(\d+[.,]\d{2})\s*€\s*$', line.strip())
-        
         if date_match and montant_match:
             try:
                 jour = date_match.group(1)
                 mois = date_match.group(2)
                 annee = f"20{date_match.group(3)}"
                 date_format = f"{jour}/{mois}/{annee}"
-                
                 montant = float(montant_match.group(1).replace(',', '.'))
-                
                 start_idx = date_match.end()
                 end_idx = montant_match.start()
                 middle_text = line.strip()[start_idx:end_idx].strip()
-                
                 transactions.append({
                     'Date': date_format,
                     'Libellé': middle_text,
@@ -205,22 +188,18 @@ def extract_bp_transactions(lines: List[str]) -> List[Dict]:
                 })
             except:
                 pass
-    
     return transactions
 
 def extract_lcl_transactions(lines: List[str]) -> List[Dict]:
     """Format LCL: PAIEMENTS PAR CARTE"""
     transactions = []
-    
     mois_dict = {
         'JANVIER': '01', 'FÉVRIER': '02', 'MARS': '03', 'AVRIL': '04',
         'MAI': '05', 'JUIN': '06', 'JUILLET': '07', 'AOÛT': '08', 'AOUT': '08',
         'SEPTEMBRE': '09', 'OCTOBRE': '10', 'NOVEMBRE': '11', 'DÉCEMBRE': '12', 'DECEMBRE': '12'
     }
-    
     annee = None
     mois_num = None
-    
     for line in lines:
         match = re.search(r'PAIEMENTS PAR CARTE DE\s+(\w+)\s*(\d{4})', line)
         if match:
@@ -228,40 +207,29 @@ def extract_lcl_transactions(lines: List[str]) -> List[Dict]:
             annee = match.group(2)
             mois_num = mois_dict.get(mois_txt, None)
             break
-    
     if not annee:
         annee = '2025'
-    
     in_card_section = False
     skip_keywords = ['PAIEMENTS', 'TOTAL', 'MONTANT', 'CARTE', 'RELEVE']
-    
     for line in lines:
         if 'PAIEMENTS PAR CARTE DE' in line:
             in_card_section = True
             continue
-        
         if in_card_section and 'RELEVE DE COMPTE' in line:
             in_card_section = False
             continue
-        
         if not in_card_section or not line.strip():
             continue
-        
         if any(skip in line for skip in skip_keywords):
             continue
-        
         montant_match = re.search(r'(\d+[.,]\d{2})\s*$', line.strip())
-        
         if montant_match:
             try:
                 montant = float(montant_match.group(1).replace(',', '.'))
                 libelle = line.strip()[:montant_match.start()].strip()
-                
                 if not libelle or len(libelle) < 3:
                     continue
-                
                 date_match = re.search(r'LE\s+(\d{1,2})/(\d{1,2})', libelle)
-                
                 if date_match:
                     jour = date_match.group(1)
                     mois = date_match.group(2)
@@ -270,7 +238,6 @@ def extract_lcl_transactions(lines: List[str]) -> List[Dict]:
                     date_format = f"01/{mois_num}/{annee}"
                 else:
                     continue
-                
                 transactions.append({
                     'Date': date_format,
                     'Libellé': libelle,
@@ -278,33 +245,27 @@ def extract_lcl_transactions(lines: List[str]) -> List[Dict]:
                 })
             except:
                 pass
-    
     return transactions
 
 def extract_from_pdf(pdf_bytes: bytes) -> tuple:
     """Extrait transactions depuis PDF"""
     try:
         pdf_file = io.BytesIO(pdf_bytes)
-        
         with pdfplumber.open(pdf_file) as pdf:
             text = ""
             for page in pdf.pages:
                 text += page.extract_text() + "\n"
-            
-            bank_type = detect_bank_format(text)
-            lines = [l.strip() for l in text.split('\n') if l.strip()]
-            
-            if bank_type == 'CA':
-                transactions = extract_ca_transactions(lines)
-            elif bank_type == 'BP':
-                transactions = extract_bp_transactions(lines)
-            elif bank_type == 'LCL':
-                transactions = extract_lcl_transactions(lines)
-            else:
-                transactions = []
-            
-            return transactions, bank_type
-    
+        bank_type = detect_bank_format(text)
+        lines = [l.strip() for l in text.split('\n') if l.strip()]
+        if bank_type == 'CA':
+            transactions = extract_ca_transactions(lines)
+        elif bank_type == 'BP':
+            transactions = extract_bp_transactions(lines)
+        elif bank_type == 'LCL':
+            transactions = extract_lcl_transactions(lines)
+        else:
+            transactions = []
+        return transactions, bank_type
     except Exception as e:
         print(f"Erreur extraction: {str(e)}")
         return [], 'ERROR'
@@ -313,69 +274,78 @@ def generate_excel(transactions: List[Dict]) -> bytes:
     """Génère fichier Excel depuis transactions"""
     if not transactions:
         return None
-    
     df = pd.DataFrame(transactions)
-    
     # Validation dates
     df['Date'] = pd.to_datetime(df['Date'], format='%d/%m/%Y', errors='coerce')
     df = df.dropna(subset=['Date'])
     df['Date'] = df['Date'].dt.strftime('%d/%m/%Y')
-    
     if df.empty:
         return None
-    
     # Générer Excel en mémoire
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df[['Date', 'Libellé', 'Montant']].to_excel(
             writer, index=False, sheet_name='Relevé'
         )
-        
         ws = writer.sheets['Relevé']
         ws.column_dimensions['A'].width = 12
         ws.column_dimensions['B'].width = 50
         ws.column_dimensions['C'].width = 15
-    
     output.seek(0)
     return output.getvalue()
 
 # ============ ENDPOINTS AUTH ============
-
 @app.post("/auth/login")
 async def login(user: UserLogin):
+    """Endpoint de connexion"""
     # Pas besoin de token au login
     if user.email not in USERS_DB:
         raise HTTPException(status_code=401, detail="Invalid credentials")
-    
     stored_user = USERS_DB[user.email]
     if not verify_password(user.password, stored_user["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid credentials")
-    
     token = create_access_token(user.email)
-    return {"access_token": token, "token_type": "bearer", "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60}
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        "user": {
+            "email": user.email,
+            "full_name": stored_user["full_name"]
+        }
+    }
 
 @app.post("/auth/register")
 async def register(user: UserRegister):
+    """Endpoint d'inscription"""
     # Pas besoin de token au register
     if user.email in USERS_DB:
         raise HTTPException(status_code=400, detail="Email already registered")
     
     USERS_DB[user.email] = {
         "password_hash": hash_password(user.password),
-        "fullname": user.fullname,
+        "full_name": user.full_name,
         "created_at": datetime.utcnow()
     }
     
     token = create_access_token(user.email)
-    return {"access_token": token, "token_type": "bearer", "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60}
+    
+    # ✅ CORRECTION : Retourner full_name au lieu de fullname
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        "user": {
+            "email": user.email,
+            "full_name": user.full_name
+        }
+    }
 
 # ============ ENDPOINTS UPLOAD ============
-
 @app.post("/upload", response_model=UploadResponse)
 async def upload_pdf(file: UploadFile = File(...), token: str = None):
     """Upload et traiter PDF"""
     email = get_current_user(token)
-    
     if file.content_type != "application/pdf":
         raise HTTPException(status_code=400, detail="Only PDF files allowed")
     
@@ -414,7 +384,6 @@ async def upload_pdf(file: UploadFile = File(...), token: str = None):
 async def download_excel(upload_id: str, token: str = None):
     """Télécharger fichier Excel"""
     email = get_current_user(token)
-    
     if upload_id not in UPLOADS_DB:
         raise HTTPException(status_code=404, detail="Upload not found")
     
@@ -431,7 +400,6 @@ async def download_excel(upload_id: str, token: str = None):
 async def get_history(token: str = None):
     """Historique des uploads"""
     email = get_current_user(token)
-    
     user_uploads = [
         {
             "id": uid,
@@ -443,11 +411,9 @@ async def get_history(token: str = None):
         for uid, data in UPLOADS_DB.items()
         if data["user_email"] == email
     ]
-    
     return {"uploads": user_uploads}
 
 # ============ HEALTH CHECK ============
-
 @app.get("/health")
 async def health():
     """Health check"""
