@@ -102,14 +102,19 @@ def verify_password(password: str, hashed: str) -> bool:
     """Vérifier password"""
     return bcrypt.checkpw(password.encode(), hashed.encode())
 
-def create_access_token(email: str, expires_delta: Optional[timedelta] = None):
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     """Créer JWT token"""
+    to_encode = data.copy()
+    
     if expires_delta is None:
         expires_delta = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    
     expire = datetime.utcnow() + expires_delta
-    to_encode = {"sub": email, "exp": expire}
+    to_encode.update({"exp": expire})
+    
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
+
 
 def verify_token(token: str):
     """Vérifier JWT token"""
@@ -488,7 +493,7 @@ async def login(user: UserLogin, db: Session = Depends(get_db)):
     if not verify_password(user.password, stored_user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     
-    token = create_access_token(user.email)
+    token = create_access_token(data={"sub": user.email})
     
     return {
         "access_token": token,
