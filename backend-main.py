@@ -1100,6 +1100,42 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
         logger.info(f"ℹ️ Unhandled event type: {event['type']}")
     
     return {"status": "success"}
+    
+
+@app.post("/create-portal-session")
+async def create_portal_session(
+    email: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Créer une session Stripe Customer Portal
+    Permet à l'utilisateur de gérer son abonnement (annuler, changer de plan, etc.)
+    """
+    user = db.query(User).filter(User.email == email).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    
+    # Vérifier que l'utilisateur a un customer_id Stripe
+    if not user.stripe_customer_id:
+        raise HTTPException(
+            status_code=400, 
+            detail="Aucun abonnement actif trouvé"
+        )
+    
+    try:
+        # Créer une session du portail client
+        session = stripe.billing_portal.Session.create(
+            customer=user.stripe_customer_id,
+            return_url=f"{os.getenv('FRONTEND_URL', 'http://localhost:5173')}/dashboard",
+        )
+        
+        logger.info(f"✅ Portal session created for {email}")
+        return {"url": session.url}
+        
+    except Exception as e:
+        logger.error(f"❌ Stripe portal error: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+
 
 
 # ============ VALIDATION ENDPOINTS ============
