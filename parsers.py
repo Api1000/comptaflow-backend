@@ -150,9 +150,9 @@ def extract_bp_transactions(lines: List[str]) -> List[Dict]:
 def extract_lcl_transactions(lines: List[str]) -> List[Dict]:
     """
     Format LCL - PAIEMENTS PAR CARTE
-    Gère les formats:
-    - PAIEMENTS PAR CARTE D'OCTOBRE 2025
-    - PAIEMENTS PAR CARTE DE NOVEMBRE 2025
+    Gère deux formats:
+    1. Format classique: "LIBELLE LE JJ/MM MONTANT" (sur une ligne)
+    2. Format scanné: "LIBELLE LE JJ/MM" sur une ligne, "MONTANT" sur la suivante
     """
     transactions = []
     
@@ -168,9 +168,8 @@ def extract_lcl_transactions(lines: List[str]) -> List[Dict]:
     annee = None
     mois_num = None
     
-    # Extraire mois et année du titre (supporte D' et DE)
+    # Extraire mois et année du titre
     for line in lines:
-        # Pattern: PAIEMENTS PAR CARTE D'OCTOBRE 2025 ou DE NOVEMBRE 2025
         match = re.search(r"PAIEMENTS PAR CARTE D[E']?\s*([A-ZÉÈÊÀÙ]+)\s+(\d{4})", line)
         if match:
             mois_txt = match.group(1).upper()
@@ -180,91 +179,108 @@ def extract_lcl_transactions(lines: List[str]) -> List[Dict]:
             break
     
     if not annee:
-        annee = '2025'  # Année par défaut
+        annee = '2025'
         logger.warning("⚠️ Année non détectée, utilisation de 2025 par défaut")
     
     in_card_section = False
     skip_keywords = [
         'PAIEMENTS', 'TOTAL', 'MONTANT', 'CARTE', 'RELEVE', 
-        'SOUS TOTAL', 'LIBELLE', 'VALEUR', 'DEBIT', 'CREDIT'
+        'SOUS TOTAL', 'LIBELLE', 'VALEUR', 'DEBIT', 'CREDIT',
+        'Page', 'Crédit Lyonnais', 'SIREN', 'RCS', 'ORIAS'
     ]
     
-    for line in lines:
-        # Activer le parsing après "PAIEMENTS PAR CARTE"
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        
+        # Activer le parsing
         if 'PAIEMENTS PAR CARTE' in line:
             in_card_section = True
+            i += 1
             continue
         
-        # Désactiver si on retrouve un nouvel en-tête
-        if in_card_section and 'RELEVE DE COMPTE' in line:
+        # Désactiver si nouvel en-tête
+        if in_card_section and 'RELEVE DE COMPTE' in line and 'PAIEMENTS' not in line:
             in_card_section = False
+            i += 1
             continue
         
-        if not in_card_section or not line.strip():
+        if not in_card_section or not line:
+            i += 1
             continue
         
         # Ignorer les lignes d'en-tête
         if any(skip in line for skip in skip_keywords):
+            i += 1
             continue
         
-        # Pattern principal: LIBELLE LE JJ/MM MONTANT
-        # Ex: "CAFE FRANCIS LE 31/10 23,40"
-        montant_match = re.search(r'(\d{1,}[,\.]\d{2})\s*$', line.strip())
+        # Chercher le pattern "LE JJ/MM" dans la ligne
+        date_match = re.search(r'LE\s+(\d{1,2})/(\d{1,2})', line)
         
-        if montant_match:
-            try:
-                montant = float(montant_match.group(1).replace(',', '.'))
-                libelle = line.strip()[:montant_match.start()].strip()
+        if date_match:
+            jour = date_match.group(1).zfill(2)
+            mois = date_match.group(2).zfill(2)
+            libelle = line.strip()
+            
+            # Extraire l'année correcte (gestion cross-mois)
+            if mois_num and int(mois) < int(mois_num):
+                annee_trans = annee
+            elif mois_num and int(mois) > int(mois_num):
+                if int(mois_num) == 12 and int(mois) == 1:
+                    annee_trans = str(int(annee) - 1)
+                else:
+                    annee_trans = annee
+            else:
+                annee_trans = annee
+            
+            date_format = f"{jour}/{mois}/{annee_trans}"
+            
+            # CASE 1: Montant sur la MÊME ligne
+            montant_same_line = re.search(r'(\d{1,}[,\.]\d{2})\s*$', line)
+            
+            if montant_same_line:
+                try:
+                    montant = float(montant_same_line.group(1).replace(',', '.'))
+                    # Retirer le montant du libellé
+                    libelle = line[:montant_same_line.start()].strip()
+                    
+                    if len(libelle) >= 3:
+                        transactions.append({
+                            'Date': date_format,
+                            'Libellé': libelle,
+                            'Montant': -montant
+                        })
+                        logger.debug(f"✅ Transaction (même ligne): {libelle} - {montant}€")
+                except:
+                    pass
+            
+            # CASE 2: Montant sur la ligne SUIVANTE
+            elif i + 1 < len(lines):
+                next_line = lines[i + 1].strip()
                 
-                # Ignorer les lignes trop courtes ou vides
-                if not libelle or len(libelle) < 3:
-                    continue
+                # Vérifier si la ligne suivante est un montant pur
+                montant_next_line = re.match(r'^(\d{1,}[,\.]\d{2})$', next_line)
                 
-                # Extraire la date LE JJ/MM
-                date_match = re.search(r'LE\s+(\d{1,2})/(\d{1,2})', libelle)
-                
-                if date_match:
-                    jour = date_match.group(1).zfill(2)
-                    mois = date_match.group(2).zfill(2)
-                    
-                    # Gérer les transactions cross-mois
-                    # Si mois transaction < mois relevé, c'est le mois précédent
-                    if mois_num and int(mois) < int(mois_num):
-                        # Transaction du mois précédent (ex: 30/10 dans relevé de novembre)
-                        annee_trans = annee
-                    elif mois_num and int(mois) > int(mois_num):
-                        # Transaction du mois suivant (rare, mais possible en début de mois)
-                        # Décrémenter l'année si on passe de décembre à janvier
-                        if int(mois_num) == 12 and int(mois) == 1:
-                            annee_trans = str(int(annee) - 1)
-                        else:
-                            annee_trans = annee
-                    else:
-                        annee_trans = annee
-                    
-                    date_format = f"{jour}/{mois}/{annee_trans}"
-                    
-                    transactions.append({
-                        'Date': date_format,
-                        'Libellé': libelle,
-                        'Montant': -montant  # Négatif car ce sont des débits
-                    })
-                    
-                elif mois_num:
-                    # Pas de date explicite, utiliser le 01 du mois du relevé
-                    date_format = f"01/{mois_num}/{annee}"
-                    transactions.append({
-                        'Date': date_format,
-                        'Libellé': libelle,
-                        'Montant': -montant
-                    })
-                    
-            except Exception as e:
-                logger.debug(f"⚠️ Ligne ignorée: {line[:50]}... - Erreur: {str(e)}")
-                pass
+                if montant_next_line:
+                    try:
+                        montant = float(montant_next_line.group(1).replace(',', '.'))
+                        
+                        if len(libelle) >= 3:
+                            transactions.append({
+                                'Date': date_format,
+                                'Libellé': libelle,
+                                'Montant': -montant
+                            })
+                            logger.debug(f"✅ Transaction (ligne suivante): {libelle} - {montant}€")
+                            i += 1  # Sauter la ligne du montant
+                    except:
+                        pass
+        
+        i += 1
     
     logger.info(f"✅ {len(transactions)} transactions LCL extraites")
     return transactions
+
 
 
 # ============================================================================
