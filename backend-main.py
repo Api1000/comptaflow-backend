@@ -1033,61 +1033,32 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
     logger.info(f"📨 Webhook received: {event['type']}")
     
     # === PAIEMENT RÉUSSI ===
-    if event['type'] == 'checkout.session.completed':
-        session = event['data']['object']
+    if event['type'] == "checkout.session.completed":
+        session = event["data"]["object"]
+        customer_id = session.get("customer")
+        customer_email = session.get("customer_email")
+        metadata = session.get("metadata", {})
+        plan = metadata.get("plan")  # "premium" ou "pro"
+    
+        logger.info(f"✅ Checkout completed: {customer_email} - Plan: {plan}")
+    
+        if not customer_email or not plan:
+            logger.error("Missing email or plan in session metadata")
+            return {"status": "error", "message": "Missing metadata"}
         
-        # Récupérer l'email du client
-        customer_email = session.get('customer_email') or session.get('customer_details', {}).get('email')
-        
-        if not customer_email:
-            logger.error("❌ No customer email in checkout session")
-            return {"status": "error", "message": "No customer email"}
-        
-        # Récupérer le plan depuis les métadonnées
-        plan = session.get('metadata', {}).get('plan', 'premium')
-        customer_id = session.get('customer')
-        
-        logger.info(f"💳 Payment completed for {customer_email} - Plan: {plan} - Customer ID: {customer_id}")
-        
-        # Mettre à jour l'utilisateur
+        # Trouver l'utilisateur
         user = db.query(User).filter(User.email == customer_email).first()
-        
         if not user:
             logger.error(f"❌ User not found: {customer_email}")
-            return {"status": "error", "message": "User not found"}
+            raise HTTPException(status_code=401, detail="User not found")
         
         try:
-            # Mettre à jour le plan et le Stripe Customer ID
+            # ✅ MISE À JOUR DU PLAN ET CUSTOMER ID
             user.subscription_tier = plan
             user.stripe_customer_id = customer_id
             user.updated_at = datetime.now(timezone.utc)
             
-            # Reset les limites du mois en cours pour lui donner accès immédiatement
-            today = datetime.now(timezone.utc)
-            usage = db.query(UsageLog).filter(
-                UsageLog.user_id == user.id,
-                UsageLog.month == today.month,
-                UsageLog.year == today.year
-            ).first()
-            
-            if usage:
-                # Reset le compteur pour le nouveau plan
-                usage.uploads_count = 0
-                logger.info(f"✅ Usage counter reset for {customer_email}")
-            else:
-                # Créer un nouveau log d'usage si n'existe pas
-                new_usage = UsageLog(
-                    user_id=user.id,
-                    month=today.month,
-                    year=today.year,
-                    uploads_count=0
-                )
-                db.add(new_usage)
-                logger.info(f"✅ New usage log created for {customer_email}")
-            
-            # Sauvegarder tous les changements
             db.commit()
-            
             logger.info(f"✅ User {customer_email} successfully upgraded to {plan.upper()}")
             
         except Exception as e:
@@ -1116,6 +1087,45 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
         else:
             logger.warning(f"⚠️ User not found for customer_id: {customer_id}")
     
+    # === ABONNEMENT MODIFIÉ (changement de plan) ===
+    elif event['type'] == 'customer.subscription.updated':
+        subscription = event['data']['object']
+        customer_id = subscription['customer']
+        
+        # Récupérer le price_id du plan actuel
+        price_id = subscription['items']['data'][0]['price']['id']
+        
+        logger.info(f"🔄 Subscription updated for customer: {customer_id} - Price ID: {price_id}")
+        
+        # Mapper les price_id vers les plans
+        price_to_plan = {
+            os.getenv('STRIPE_PRICE_PREMIUM'): 'premium',
+            os.getenv('STRIPE_PRICE_PRO'): 'pro',
+        }
+        
+        new_plan = price_to_plan.get(price_id)
+        
+        if not new_plan:
+            logger.warning(f"⚠️ Unknown price_id: {price_id}")
+            return {"status": "error", "message": "Unknown price"}
+        
+        # Récupérer l'utilisateur par customer_id
+        user = db.query(User).filter(User.stripe_customer_id == customer_id).first()
+        
+        if user:
+            try:
+                old_plan = user.subscription_tier
+                user.subscription_tier = new_plan
+                user.updated_at = datetime.now(timezone.utc)
+                db.commit()
+                logger.info(f"✅ User {user.email} plan changed: {old_plan} → {new_plan}")
+            except Exception as e:
+                db.rollback()
+                logger.error(f"❌ Error updating user plan: {str(e)}")
+        else:
+            logger.warning(f"⚠️ User not found for customer_id: {customer_id}")
+
+
     # === PAIEMENT ÉCHOUÉ ===
     elif event['type'] == 'invoice.payment_failed':
         invoice = event['data']['object']
@@ -1128,6 +1138,43 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
         logger.info(f"ℹ️ Unhandled event type: {event['type']}")
     
     return {"status": "success"}
+
+    
+
+@app.post("/create-portal-session")
+async def create_portal_session(
+    email: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Créer une session Stripe Customer Portal
+    Permet à l'utilisateur de gérer son abonnement (annuler, changer de plan, etc.)
+    """
+    user = db.query(User).filter(User.email == email).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    
+    # Vérifier que l'utilisateur a un customer_id Stripe
+    if not user.stripe_customer_id:
+        raise HTTPException(
+            status_code=400, 
+            detail="Aucun abonnement actif trouvé"
+        )
+    
+    try:
+        # Créer une session du portail client
+        session = stripe.billing_portal.Session.create(
+            customer=user.stripe_customer_id,
+            return_url=f"{os.getenv('FRONTEND_URL', 'http://localhost:5173')}/dashboard",
+        )
+        
+        logger.info(f"✅ Portal session created for {email}")
+        return {"url": session.url}
+        
+    except Exception as e:
+        logger.error(f"❌ Stripe portal error: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+
 
 
 # ============ VALIDATION ENDPOINTS ============
