@@ -1033,67 +1033,39 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
     logger.info(f"📨 Webhook received: {event['type']}")
     
     # === PAIEMENT RÉUSSI ===
-    if event['type'] == 'checkout.session.completed':
-        session = event['data']['object']
+    if eventtype == "checkout.session.completed":
+    session = event["data"]["object"]
+    customerid = session.get("customer")
+    customeremail = session.get("customer_email")
+    metadata = session.get("metadata", {})
+    plan = metadata.get("plan")  # "premium" ou "pro"
+    
+    logger.info(f"✅ Checkout completed: {customeremail} - Plan: {plan}")
+    
+    if not customeremail or not plan:
+        logger.error("Missing email or plan in session metadata")
+        return {"status": "error", "message": "Missing metadata"}
+    
+    # Trouver l'utilisateur
+    user = db.query(User).filter(User.email == customeremail).first()
+    if not user:
+        logger.error(f"❌ User not found: {customeremail}")
+        raise HTTPException(status_code=401, detail="User not found")
+    
+    try:
+        # ✅ MISE À JOUR DU PLAN ET CUSTOMER ID
+        user.subscription_tier = plan
+        user.stripe_customer_id = customerid
+        user.updated_at = datetime.now(timezone.utc)
         
-        # Récupérer l'email du client
-        customer_email = session.get('customer_email') or session.get('customer_details', {}).get('email')
+        db.commit()
+        logger.info(f"✅ User {customeremail} successfully upgraded to {plan.upper()}")
         
-        if not customer_email:
-            logger.error("❌ No customer email in checkout session")
-            return {"status": "error", "message": "No customer email"}
-        
-        # Récupérer le plan depuis les métadonnées
-        plan = session.get('metadata', {}).get('plan', 'premium')
-        customer_id = session.get('customer')
-        
-        logger.info(f"💳 Payment completed for {customer_email} - Plan: {plan} - Customer ID: {customer_id}")
-        
-        # Mettre à jour l'utilisateur
-        user = db.query(User).filter(User.email == customer_email).first()
-        
-        if not user:
-            logger.error(f"❌ User not found: {customer_email}")
-            return {"status": "error", "message": "User not found"}
-        
-        try:
-            # Mettre à jour le plan et le Stripe Customer ID
-            user.subscription_tier = plan
-            user.stripe_customer_id = customer_id
-            user.updated_at = datetime.now(timezone.utc)
-            
-            # Reset les limites du mois en cours pour lui donner accès immédiatement
-            today = datetime.now(timezone.utc)
-            usage = db.query(UsageLog).filter(
-                UsageLog.user_id == user.id,
-                UsageLog.month == today.month,
-                UsageLog.year == today.year
-            ).first()
-            
-            if usage:
-                # Reset le compteur pour le nouveau plan
-                usage.uploads_count = 0
-                logger.info(f"✅ Usage counter reset for {customer_email}")
-            else:
-                # Créer un nouveau log d'usage si n'existe pas
-                new_usage = UsageLog(
-                    user_id=user.id,
-                    month=today.month,
-                    year=today.year,
-                    uploads_count=0
-                )
-                db.add(new_usage)
-                logger.info(f"✅ New usage log created for {customer_email}")
-            
-            # Sauvegarder tous les changements
-            db.commit()
-            
-            logger.info(f"✅ User {customer_email} successfully upgraded to {plan.upper()}")
-            
-        except Exception as e:
-            db.rollback()
-            logger.error(f"❌ Error updating user {customer_email}: {str(e)}")
-            return {"status": "error", "message": str(e)}
+    except Exception as e:
+        db.rollback()
+        logger.error(f"❌ Error updating user {customeremail}: {str(e)}")
+        return {"status": "error", "message": str(e)}
+
     
     # === ABONNEMENT ANNULÉ ===
     elif event['type'] == 'customer.subscription.deleted':
