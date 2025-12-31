@@ -42,6 +42,11 @@ from parsers import (
     generate_excel
 )
 
+import sys
+# Forcer l'affichage immédiat des logs (sans buffer)
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
+
 # ============================================================================
 # CONFIG
 # ============================================================================
@@ -1273,7 +1278,16 @@ async def root():
     }
     
 
-
+#TEST#
+@app.get("/test-logs")
+async def test_logs():
+    """Endpoint de test pour vérifier que les logs fonctionnent"""
+    logger.info("🧪 TEST LOG INFO")
+    logger.warning("⚠️ TEST LOG WARNING")
+    logger.error("❌ TEST LOG ERROR")
+    logger.debug("🔍 TEST LOG DEBUG (visible seulement si level=DEBUG)")
+    
+    return {"status": "Logs envoyés - Vérifiez la console Render"}
 
 
 # ============================================================================
