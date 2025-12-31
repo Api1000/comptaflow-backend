@@ -58,28 +58,33 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 60
 stripe.api_key = os.getenv('STRIPE_SECRET_KEY')
 
 # ============================================================================
-# CONFIGURATION DU LOGGING
+# CONFIGURATION DU LOGGING (APRÈS LES IMPORTS)
 # ============================================================================
 
-# Configuration robuste pour logs locaux + Render
+import sys
+import logging
+
+# Forcer l'affichage immédiat
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
+
+# Configurer le logging
 logging.basicConfig(
-    level=logging.INFO,  # Changez en DEBUG pour plus de détails
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
     handlers=[
-        logging.StreamHandler(),  # Affiche dans la console/Render
-    ]
+        logging.StreamHandler(sys.stdout)
+    ],
+    force=True  # Forcer la reconfiguration
 )
 
+# Logger principal
 logger = logging.getLogger(__name__)
 
-# Activer les logs du module parsers
-logging.getLogger('parsers').setLevel(logging.INFO)  # ou DEBUG
+# Activer les logs des modules spécifiques
+logging.getLogger('parsers').setLevel(logging.INFO)
+logging.getLogger('uvicorn').setLevel(logging.WARNING)  # Réduire le bruit de uvicorn
 
-# Log de démarrage
-logger.info("=" * 80)
-logger.info("🚀 COMPTAFLOW BACKEND DÉMARRÉ")
-logger.info(f"🔧 Environnement: {'PRODUCTION' if os.getenv('STRIPE_SECRET_KEY', '').startswith('sk_live') else 'STAGING/TEST'}")
-logger.info("=" * 80)
 
 
 # ============================================================================
