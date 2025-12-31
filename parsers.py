@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 COMPTAFLOW - Module de Parsing Bancaire
-Extraction et parsing de relevés bancaires PDF
+VERSION AVEC LOGS DÉTAILLÉS POUR DEBUG
 """
 
 import pdfplumber
@@ -16,6 +16,33 @@ from io import BytesIO
 from fastapi import HTTPException
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# FONCTION DE DEBUG
+# ============================================================================
+
+def debug_pdf_content(pdf_bytes: bytes, num_lines: int = 50):
+    """
+    Affiche les N premières lignes du PDF pour debug
+    """
+    try:
+        pdf_file = io.BytesIO(pdf_bytes)
+        with pdfplumber.open(pdf_file) as pdf:
+            text = ""
+            for page in pdf.pages:
+                text += page.extract_text()
+        
+        lines = text.split('\n')
+        logger.info("=" * 80)
+        logger.info(f"📄 CONTENU DU PDF (premières {num_lines} lignes)")
+        logger.info("=" * 80)
+        for i, line in enumerate(lines[:num_lines]):
+            logger.info(f"[{i:3d}] {line}")
+        logger.info("=" * 80)
+        
+    except Exception as e:
+        logger.error(f"Erreur debug PDF: {str(e)}")
 
 
 # ============================================================================
@@ -64,20 +91,15 @@ def detect_bank_format(text: str) -> str:
 # ============================================================================
 
 def extract_ca_transactions(lines: List[str]) -> List[Dict]:
-    """
-    Format Crédit Agricole: JJ.MM COMMERCE LIEU MONTANT
-    """
+    """Format Crédit Agricole: JJ.MM COMMERCE LIEU MONTANT"""
     transactions = []
     skip_keywords = ['TOTAL', 'Date', 'Montant', 'Commerce', 'Page']
     
     for line in lines:
-        # Ignorer les lignes d'en-tête
         if any(skip in line for skip in skip_keywords):
             continue
         
-        # Pattern: date au format JJ.MM
         date_match = re.search(r'(\d{1,2}\.\d{2})', line)
-        # Pattern: montant au format -?X,XX ou -?X.XXX,XX
         montant_match = re.search(r'-?(\d{1,5}),(\d{2})', line)
         
         if date_match and montant_match:
@@ -108,9 +130,7 @@ def extract_ca_transactions(lines: List[str]) -> List[Dict]:
 
 
 def extract_bp_transactions(lines: List[str]) -> List[Dict]:
-    """
-    Format Banque Populaire: JJMMYY COMMERCE ADRESSE MONTANT
-    """
+    """Format Banque Populaire: JJMMYY COMMERCE ADRESSE MONTANT"""
     transactions = []
     skip_keywords = ['DATE', 'NOM', 'MONTANT', 'Page', 'TOTAL']
     
@@ -118,9 +138,7 @@ def extract_bp_transactions(lines: List[str]) -> List[Dict]:
         if any(skip in line for skip in skip_keywords):
             continue
         
-        # Pattern: JJMMYY au début de la ligne
         date_match = re.match(r'(\d{1,2})(\d{2})(\d{2})', line.strip())
-        # Pattern: montant avec virgule
         montant_match = re.search(r'(\d+),(\d{2})', line.strip())
         
         if date_match and montant_match:
@@ -150,11 +168,13 @@ def extract_bp_transactions(lines: List[str]) -> List[Dict]:
 def extract_lcl_transactions(lines: List[str]) -> List[Dict]:
     """
     Format LCL - PAIEMENTS PAR CARTE
-    Gère deux formats:
-    1. Format classique: "LIBELLE LE JJ/MM MONTANT" (sur une ligne)
-    2. Format scanné: "LIBELLE LE JJ/MM" sur une ligne, "MONTANT" sur la suivante
+    VERSION AVEC LOGS DÉTAILLÉS POUR DEBUG
     """
     transactions = []
+    
+    logger.info("=" * 80)
+    logger.info("🔍 DÉBUT DU PARSING LCL")
+    logger.info(f"📊 Nombre total de lignes reçues: {len(lines)}")
     
     # Dictionnaire des mois
     mois_dict = {
@@ -165,64 +185,82 @@ def extract_lcl_transactions(lines: List[str]) -> List[Dict]:
         'DÉCEMBRE': '12', 'DECEMBRE': '12'
     }
     
+    # === ÉTAPE 1: Détecter mois et année ===
     annee = None
     mois_num = None
     
-    # Extraire mois et année du titre
-    for line in lines:
-        match = re.search(r"PAIEMENTS PAR CARTE D[E']?\s*([A-ZÉÈÊÀÙ]+)\s+(\d{4})", line)
-        if match:
-            mois_txt = match.group(1).upper()
-            annee = match.group(2)
-            mois_num = mois_dict.get(mois_txt, None)
-            logger.info(f"📅 Relevé LCL détecté: {mois_txt} {annee} (mois={mois_num})")
-            break
+    logger.info("\n📅 ÉTAPE 1: Recherche du mois et de l'année...")
+    for idx, line in enumerate(lines[:30]):
+        if 'PAIEMENTS PAR CARTE' in line.upper():
+            logger.info(f"   Ligne {idx}: {line}")
+            match = re.search(r"PAIEMENTS PAR CARTE D[E']?\s*([A-ZÉÈÊÀÙ]+)\s+(\d{4})", line.upper())
+            if match:
+                mois_txt = match.group(1).upper()
+                annee = match.group(2)
+                mois_num = mois_dict.get(mois_txt, None)
+                logger.info(f"✅ TROUVÉ: Mois={mois_txt} ({mois_num}), Année={annee}")
+                break
     
     if not annee:
         annee = '2025'
-        logger.warning("⚠️ Année non détectée, utilisation de 2025 par défaut")
+        logger.warning(f"⚠️ Mois/Année non détectés, utilisation par défaut: {annee}")
     
-    in_card_section = False
+    # === ÉTAPE 2: Identifier la section de transactions ===
+    logger.info("\n📍 ÉTAPE 2: Identification de la section des transactions...")
+    
+    start_idx = None
+    end_idx = len(lines)
+    
+    for idx, line in enumerate(lines):
+        if 'PAIEMENTS PAR CARTE' in line.upper():
+            start_idx = idx + 1
+            logger.info(f"   Début de section trouvé à la ligne {idx}")
+        if start_idx and 'TOTAUX' in line.upper():
+            end_idx = idx
+            logger.info(f"   Fin de section trouvée à la ligne {idx}")
+            break
+    
+    if not start_idx:
+        logger.error("❌ Section PAIEMENTS PAR CARTE non trouvée!")
+        return []
+    
+    transaction_lines = lines[start_idx:end_idx]
+    logger.info(f"✅ Section identifiée: lignes {start_idx} à {end_idx} ({len(transaction_lines)} lignes)")
+    
+    # === ÉTAPE 3: Parser les transactions ===
+    logger.info("\n💳 ÉTAPE 3: Parsing des transactions...")
+    
     skip_keywords = [
-        'PAIEMENTS', 'TOTAL', 'MONTANT', 'CARTE', 'RELEVE', 
-        'SOUS TOTAL', 'LIBELLE', 'VALEUR', 'DEBIT', 'CREDIT',
-        'Page', 'Crédit Lyonnais', 'SIREN', 'RCS', 'ORIAS'
+        'SOUS TOTAL', 'LIBELLE', 'VALEUR', 'DEBIT', 'CREDIT', 
+        'CARTE N°', 'Page', 'Crédit Lyonnais', 'SIREN', 'RCS', 'ORIAS',
+        'Indicatif', 'Compte'
     ]
     
     i = 0
-    while i < len(lines):
-        line = lines[i].strip()
+    transaction_count = 0
+    
+    while i < len(transaction_lines):
+        line = transaction_lines[i].strip()
         
-        # Activer le parsing
-        if 'PAIEMENTS PAR CARTE' in line:
-            in_card_section = True
+        # Ignorer lignes vides
+        if not line:
             i += 1
             continue
         
-        # Désactiver si nouvel en-tête
-        if in_card_section and 'RELEVE DE COMPTE' in line and 'PAIEMENTS' not in line:
-            in_card_section = False
-            i += 1
-            continue
-        
-        if not in_card_section or not line:
-            i += 1
-            continue
-        
-        # Ignorer les lignes d'en-tête
+        # Ignorer mots-clés
         if any(skip in line for skip in skip_keywords):
+            logger.debug(f"   [{i}] SKIP (keyword): {line[:50]}")
             i += 1
             continue
         
-        # Chercher le pattern "LE JJ/MM" dans la ligne
+        # Chercher pattern "LE JJ/MM"
         date_match = re.search(r'LE\s+(\d{1,2})/(\d{1,2})', line)
         
         if date_match:
             jour = date_match.group(1).zfill(2)
             mois = date_match.group(2).zfill(2)
-            libelle = line.strip()
             
-            # Extraire l'année correcte (gestion cross-mois)
+            # Calculer l'année correcte
             if mois_num and int(mois) < int(mois_num):
                 annee_trans = annee
             elif mois_num and int(mois) > int(mois_num):
@@ -234,65 +272,88 @@ def extract_lcl_transactions(lines: List[str]) -> List[Dict]:
                 annee_trans = annee
             
             date_format = f"{jour}/{mois}/{annee_trans}"
+            libelle = line.strip()
             
-            # CASE 1: Montant sur la MÊME ligne
-            montant_same_line = re.search(r'(\d{1,}[,\.]\d{2})\s*$', line)
+            logger.debug(f"\n   [{i}] DATE TROUVÉE: {line}")
             
-            if montant_same_line:
+            # CASE 1: Montant sur la même ligne
+            montant_match = re.search(r'(\d{1,}[,\.]\d{2})\s*$', line)
+            
+            if montant_match:
                 try:
-                    montant = float(montant_same_line.group(1).replace(',', '.'))
-                    # Retirer le montant du libellé
-                    libelle = line[:montant_same_line.start()].strip()
+                    montant = float(montant_match.group(1).replace(',', '.'))
+                    libelle = line[:montant_match.start()].strip()
                     
                     if len(libelle) >= 3:
+                        transaction_count += 1
                         transactions.append({
                             'Date': date_format,
                             'Libellé': libelle,
                             'Montant': -montant
                         })
-                        logger.debug(f"✅ Transaction (même ligne): {libelle} - {montant}€")
-                except:
-                    pass
+                        logger.info(f"   ✅ Transaction #{transaction_count}: {date_format} | {libelle[:30]} | {montant}€")
+                except Exception as e:
+                    logger.warning(f"   ⚠️ Erreur parsing (même ligne): {str(e)}")
             
-            # CASE 2: Montant sur la ligne SUIVANTE
-            elif i + 1 < len(lines):
-                next_line = lines[i + 1].strip()
+            # CASE 2: Montant sur la ligne suivante
+            elif i + 1 < len(transaction_lines):
+                next_line = transaction_lines[i + 1].strip()
+                logger.debug(f"   [{i+1}] Ligne suivante: {next_line}")
                 
-                # Vérifier si la ligne suivante est un montant pur
-                montant_next_line = re.match(r'^(\d{1,}[,\.]\d{2})$', next_line)
+                # Pattern: montant seul ou avec texte après
+                montant_match = re.match(r'^(\d{1,}[,\.]\d{2})', next_line)
                 
-                if montant_next_line:
+                if montant_match:
                     try:
-                        montant = float(montant_next_line.group(1).replace(',', '.'))
+                        montant = float(montant_match.group(1).replace(',', '.'))
                         
                         if len(libelle) >= 3:
+                            transaction_count += 1
                             transactions.append({
                                 'Date': date_format,
                                 'Libellé': libelle,
                                 'Montant': -montant
                             })
-                            logger.debug(f"✅ Transaction (ligne suivante): {libelle} - {montant}€")
+                            logger.info(f"   ✅ Transaction #{transaction_count}: {date_format} | {libelle[:30]} | {montant}€ (ligne suivante)")
                             i += 1  # Sauter la ligne du montant
-                    except:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"   ⚠️ Erreur parsing (ligne suivante): {str(e)}")
+                else:
+                    logger.debug(f"   ⚠️ Pas de montant trouvé sur ligne suivante")
+            
+            else:
+                logger.debug(f"   ⚠️ Pas de ligne suivante disponible")
+        
+        else:
+            # Ligne sans date "LE JJ/MM"
+            if re.match(r'^\d{1,}[,\.]\d{2}$', line):
+                logger.debug(f"   [{i}] Montant isolé (déjà traité?): {line}")
+            else:
+                logger.debug(f"   [{i}] Autre: {line[:50]}")
         
         i += 1
     
-    logger.info(f"✅ {len(transactions)} transactions LCL extraites")
+    logger.info("\n" + "=" * 80)
+    logger.info(f"✅ PARSING TERMINÉ: {len(transactions)} transactions extraites")
+    logger.info("=" * 80)
+    
     return transactions
-
 
 
 # ============================================================================
 # EXTRACTION PRINCIPALE
 # ============================================================================
 
-def extract_from_pdf(pdf_bytes: bytes) -> Tuple[List[Dict], str]:
+def extract_from_pdf(pdf_bytes: bytes, enable_debug: bool = False) -> Tuple[List[Dict], str]:
     """
     Extrait transactions depuis PDF
     Retourne: (transactions, bank_type)
     """
     try:
+        # DEBUG: Afficher le contenu du PDF
+        if enable_debug:
+            debug_pdf_content(pdf_bytes, num_lines=100)
+        
         pdf_file = io.BytesIO(pdf_bytes)
         
         with pdfplumber.open(pdf_file) as pdf:
@@ -301,8 +362,10 @@ def extract_from_pdf(pdf_bytes: bytes) -> Tuple[List[Dict], str]:
                 text += page.extract_text()
         
         bank_type = detect_bank_format(text)
+        logger.info(f"🏦 Banque détectée: {bank_type}")
         
         lines = [l.strip() for l in text.split('\n') if l.strip()]
+        logger.info(f"📄 Nombre de lignes non-vides: {len(lines)}")
         
         # Parsing selon la banque
         if bank_type == "CA":

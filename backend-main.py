@@ -58,6 +58,8 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+# Activer les logs DEBUG pour le parsing
+logging.getLogger('parsers').setLevel(logging.DEBUG)
 
 # ============================================================================
 # APP FASTAPI
@@ -1249,6 +1251,10 @@ async def root():
         "status": "running",
         "features": ["auth", "upload", "validation", "discord_notifications"]
     }
+    
+
+
+
 
 # ============================================================================
 # MAIN
