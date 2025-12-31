@@ -84,6 +84,7 @@ logger = logging.getLogger(__name__)
 # Activer les logs des modules spécifiques
 logging.getLogger('parsers').setLevel(logging.INFO)
 logging.getLogger('uvicorn').setLevel(logging.WARNING)  # Réduire le bruit de uvicorn
+logging.getLogger('bank_detector').setLevel(logging.INFO)
 
 
 
