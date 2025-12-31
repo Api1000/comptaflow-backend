@@ -1033,39 +1033,38 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
     logger.info(f"📨 Webhook received: {event['type']}")
     
     # === PAIEMENT RÉUSSI ===
-    if eventtype == "checkout.session.completed":
+    if event['type'] == "checkout.session.completed":
         session = event["data"]["object"]
-        customerid = session.get("customer")
-        customeremail = session.get("customer_email")
+        customer_id = session.get("customer")
+        customer_email = session.get("customer_email")
         metadata = session.get("metadata", {})
         plan = metadata.get("plan")  # "premium" ou "pro"
     
-        logger.info(f"✅ Checkout completed: {customeremail} - Plan: {plan}")
+        logger.info(f"✅ Checkout completed: {customer_email} - Plan: {plan}")
     
-    if not customeremail or not plan:
-        logger.error("Missing email or plan in session metadata")
-        return {"status": "error", "message": "Missing metadata"}
-    
-    # Trouver l'utilisateur
-    user = db.query(User).filter(User.email == customeremail).first()
-    if not user:
-        logger.error(f"❌ User not found: {customeremail}")
-        raise HTTPException(status_code=401, detail="User not found")
-    
-    try:
-        # ✅ MISE À JOUR DU PLAN ET CUSTOMER ID
-        user.subscription_tier = plan
-        user.stripe_customer_id = customerid
-        user.updated_at = datetime.now(timezone.utc)
+        if not customer_email or not plan:
+            logger.error("Missing email or plan in session metadata")
+            return {"status": "error", "message": "Missing metadata"}
         
-        db.commit()
-        logger.info(f"✅ User {customeremail} successfully upgraded to {plan.upper()}")
+        # Trouver l'utilisateur
+        user = db.query(User).filter(User.email == customer_email).first()
+        if not user:
+            logger.error(f"❌ User not found: {customer_email}")
+            raise HTTPException(status_code=401, detail="User not found")
         
-    except Exception as e:
-        db.rollback()
-        logger.error(f"❌ Error updating user {customeremail}: {str(e)}")
-        return {"status": "error", "message": str(e)}
-
+        try:
+            # ✅ MISE À JOUR DU PLAN ET CUSTOMER ID
+            user.subscription_tier = plan
+            user.stripe_customer_id = customer_id
+            user.updated_at = datetime.now(timezone.utc)
+            
+            db.commit()
+            logger.info(f"✅ User {customer_email} successfully upgraded to {plan.upper()}")
+            
+        except Exception as e:
+            db.rollback()
+            logger.error(f"❌ Error updating user {customer_email}: {str(e)}")
+            return {"status": "error", "message": str(e)}
     
     # === ABONNEMENT ANNULÉ ===
     elif event['type'] == 'customer.subscription.deleted':
@@ -1100,6 +1099,7 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
         logger.info(f"ℹ️ Unhandled event type: {event['type']}")
     
     return {"status": "success"}
+
     
 
 @app.post("/create-portal-session")
