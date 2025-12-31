@@ -1034,13 +1034,13 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
     
     # === PAIEMENT RÉUSSI ===
     if eventtype == "checkout.session.completed":
-    session = event["data"]["object"]
-    customerid = session.get("customer")
-    customeremail = session.get("customer_email")
-    metadata = session.get("metadata", {})
-    plan = metadata.get("plan")  # "premium" ou "pro"
+        session = event["data"]["object"]
+        customerid = session.get("customer")
+        customeremail = session.get("customer_email")
+        metadata = session.get("metadata", {})
+        plan = metadata.get("plan")  # "premium" ou "pro"
     
-    logger.info(f"✅ Checkout completed: {customeremail} - Plan: {plan}")
+        logger.info(f"✅ Checkout completed: {customeremail} - Plan: {plan}")
     
     if not customeremail or not plan:
         logger.error("Missing email or plan in session metadata")
