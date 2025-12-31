@@ -15,7 +15,11 @@ import PyPDF2
 from io import BytesIO
 from fastapi import HTTPException
 
-logger = logging.getLogger(__name__)
+# Utilisez:
+logger = logging.getLogger('parsers')
+
+# Et juste après, configurez-le explicitement
+logger.setLevel(logging.INFO)
 
 
 # ============================================================================

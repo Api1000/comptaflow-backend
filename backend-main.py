@@ -52,14 +52,30 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
 stripe.api_key = os.getenv('STRIPE_SECRET_KEY')
 
-# Configurer le logger
+# ============================================================================
+# CONFIGURATION DU LOGGING
+# ============================================================================
+
+# Configuration robuste pour logs locaux + Render
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=logging.INFO,  # Changez en DEBUG pour plus de détails
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),  # Affiche dans la console/Render
+    ]
 )
+
 logger = logging.getLogger(__name__)
-# Activer les logs DEBUG pour le parsing
-logging.getLogger('parsers').setLevel(logging.DEBUG)
+
+# Activer les logs du module parsers
+logging.getLogger('parsers').setLevel(logging.INFO)  # ou DEBUG
+
+# Log de démarrage
+logger.info("=" * 80)
+logger.info("🚀 COMPTAFLOW BACKEND DÉMARRÉ")
+logger.info(f"🔧 Environnement: {'PRODUCTION' if os.getenv('STRIPE_SECRET_KEY', '').startswith('sk_live') else 'STAGING/TEST'}")
+logger.info("=" * 80)
+
 
 # ============================================================================
 # APP FASTAPI
@@ -428,6 +444,7 @@ async def upload_pdf(
     email: str = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+        
     """
     Upload et traiter PDF avec VALIDATION AUTOMATIQUE + NOTIFICATION DISCORD
     - Détecte la banque
@@ -436,6 +453,9 @@ async def upload_pdf(
     - Envoie notification Discord
     - Convertit si compatible
     """
+    logger.info("=" * 80)
+    logger.info(f"📤 UPLOAD REÇU: {file.filename} par {email}")
+    logger.info("=" * 80)
     if file.content_type != 'application/pdf':
         raise HTTPException(status_code=400, detail="Only PDF files allowed")
 
