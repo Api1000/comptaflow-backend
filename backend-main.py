@@ -1087,6 +1087,45 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
         else:
             logger.warning(f"⚠️ User not found for customer_id: {customer_id}")
     
+    # === ABONNEMENT MODIFIÉ (changement de plan) ===
+    elif event['type'] == 'customer.subscription.updated':
+        subscription = event['data']['object']
+        customer_id = subscription['customer']
+        
+        # Récupérer le price_id du plan actuel
+        price_id = subscription['items']['data'][0]['price']['id']
+        
+        logger.info(f"🔄 Subscription updated for customer: {customer_id} - Price ID: {price_id}")
+        
+        # Mapper les price_id vers les plans
+        price_to_plan = {
+            os.getenv('STRIPE_PRICE_PREMIUM'): 'premium',
+            os.getenv('STRIPE_PRICE_PRO'): 'pro',
+        }
+        
+        new_plan = price_to_plan.get(price_id)
+        
+        if not new_plan:
+            logger.warning(f"⚠️ Unknown price_id: {price_id}")
+            return {"status": "error", "message": "Unknown price"}
+        
+        # Récupérer l'utilisateur par customer_id
+        user = db.query(User).filter(User.stripe_customer_id == customer_id).first()
+        
+        if user:
+            try:
+                old_plan = user.subscription_tier
+                user.subscription_tier = new_plan
+                user.updated_at = datetime.now(timezone.utc)
+                db.commit()
+                logger.info(f"✅ User {user.email} plan changed: {old_plan} → {new_plan}")
+            except Exception as e:
+                db.rollback()
+                logger.error(f"❌ Error updating user plan: {str(e)}")
+        else:
+            logger.warning(f"⚠️ User not found for customer_id: {customer_id}")
+
+
     # === PAIEMENT ÉCHOUÉ ===
     elif event['type'] == 'invoice.payment_failed':
         invoice = event['data']['object']
