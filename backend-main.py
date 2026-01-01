@@ -136,6 +136,10 @@ class UploadResponse(BaseModel):
     supported_banks: Optional[dict] = None
     can_report: Optional[bool] = None
 
+class SupportContactRequest(BaseModel):
+    subject: str
+    message: str
+
 # ============================================================================
 # AUTH UTILS
 # ============================================================================
@@ -1300,13 +1304,7 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
     return {"status": "success"}
 
 
-# ============================================================================
-# SUPPORT - CONTACT FORM
-# ============================================================================
 
-class SupportContactRequest(BaseModel):
-    subject: str
-    message: str
 
 # ============================================================================
 # SUPPORT - DISCORD NOTIFICATION
