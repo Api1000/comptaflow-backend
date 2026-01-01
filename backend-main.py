@@ -132,6 +132,7 @@ class UploadResponse(BaseModel):
     bank_detected: Optional[str] = None
     message: str
     error: Optional[str] = None
+    error_type: Optional[str] = None
     supported_banks: Optional[dict] = None
     can_report: Optional[bool] = None
 
@@ -455,20 +456,21 @@ async def upload_pdf(
     email: str = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-        
     """
     Upload et traiter PDF avec VALIDATION AUTOMATIQUE + NOTIFICATION DISCORD
     - Détecte la banque
     - Vérifie la compatibilité
+    - Détecte les PDFs scannés
     - Enregistre automatiquement dans failed_conversions si incompatible
-    - Envoie notification Discord
+    - Envoie notification Discord (sauf pour les scans)
     - Convertit si compatible
     """
     logger.info("=" * 80)
     logger.info(f"📤 UPLOAD REÇU: {file.filename} par {email}")
     logger.info("=" * 80)
+
     if file.content_type != 'application/pdf':
-        raise HTTPException(status_code=400, detail="Only PDF files allowed")
+        raise HTTPException(status_code=400, detail="Seuls les fichiers PDF sont acceptés")
 
     user = db.query(User).filter(User.email == email).first()
     if not user:
@@ -482,60 +484,73 @@ async def upload_pdf(
         text = extract_text_from_pdf(pdf_bytes)
         validation_result = validate_statement(text)
 
+        logger.info(f"🔍 Validation result: compatible={validation_result['compatible']}, bank={validation_result.get('bank')}")
+
         if not validation_result['compatible']:
-            logger.warning(f"⚠️ PDF non compatible uploadé par {user.email}: {file.filename}")
+            error_type = validation_result.get('error_type', 'UNKNOWN')
+            logger.warning(f"⚠️ PDF non compatible: {error_type} - {file.filename} par {user.email}")
 
-            # === Si incompatible, enregistrer automatiquement et notifier ===
+            # === Gestion selon le type d'erreur ===
 
-            # Encoder le PDF en base64
-            pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
+            # NE PAS enregistrer les PDFs scannés (trop nombreux, pas utile)
+            if error_type != 'SCANNED_PDF':
+                # Encoder le PDF en base64
+                pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
 
-            # Insérer dans la base de données
-            failed_conversion = FailedConversion(
-                user_id=user.id,
-                user_email=user.email,
-                filename=file.filename,
-                bank_name=validation_result.get('bank', 'Inconnue'),
-                error_message=validation_result['message'],
-                user_comment="Enregistrement automatique lors de l'upload",
-                file_content=pdf_base64,
-                reported_at=datetime.now(timezone.utc),
-                status='pending'
-            )
+                # Insérer dans la base de données
+                failed_conversion = FailedConversion(
+                    user_id=user.id,
+                    user_email=user.email,
+                    filename=file.filename,
+                    bank_name=validation_result.get('bank', 'Inconnue'),
+                    error_message=f"[{error_type}] {validation_result['message'][:500]}",
+                    user_comment="Enregistrement automatique lors de l'upload",
+                    file_content=pdf_base64,
+                    reported_at=datetime.now(timezone.utc),
+                    status='pending'
+                )
 
-            db.add(failed_conversion)
-            db.commit()
-            db.refresh(failed_conversion)
+                db.add(failed_conversion)
+                db.commit()
+                db.refresh(failed_conversion)
 
-            # === ENVOYER LA NOTIFICATION DISCORD ===
-            await send_discord_notification({
-                'id': failed_conversion.id,
-                'filename': failed_conversion.filename,
-                'user_email': failed_conversion.user_email,
-                'bank_name': failed_conversion.bank_name,
-                'error_message': failed_conversion.error_message,
-                'reported_at': failed_conversion.reported_at
-            })
+                logger.info(f"💾 Failed conversion enregistrée: ID={failed_conversion.id}")
 
-            # Retourner l'erreur au frontend
+                # === NOTIFICATION DISCORD uniquement pour banques non supportées ===
+                if error_type == 'BANK_NOT_SUPPORTED':
+                    await send_discord_notification({
+                        'id': failed_conversion.id,
+                        'filename': failed_conversion.filename,
+                        'user_email': failed_conversion.user_email,
+                        'bank_name': failed_conversion.bank_name,
+                        'error_message': failed_conversion.error_message,
+                        'reported_at': failed_conversion.reported_at
+                    })
+                    logger.info(f"📧 Notification Discord envoyée")
+            else:
+                logger.info(f"⏭️ PDF scanné ignoré (non enregistré)")
+
+            # Retourner l'erreur au frontend avec message détaillé
             return UploadResponse(
                 upload_id=None,
                 status="error",
                 transactions_count=0,
                 bank_detected=validation_result.get('bank', 'UNKNOWN'),
                 message=validation_result['message'],
-                error="BANK_NOT_SUPPORTED",
+                error=error_type,
+                error_type=error_type,  # ✅ NOUVEAU CHAMP
                 supported_banks=validation_result.get('supported_banks', {}),
-                can_report=True
+                can_report=error_type != 'SCANNED_PDF'  # Pas de signalement pour les scans
             )
 
         bank_type = validation_result['bank']
+        logger.info(f"✅ Validation réussie: {bank_type}")
 
     except Exception as e:
-        logger.error(f"❌ Validation error: {str(e)}")
+        logger.error(f"❌ Validation error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=400, detail=f"Erreur de validation: {str(e)}")
 
-    # === SI COMPATIBLE: Vérifier les limites ===
+    # === SI COMPATIBLE: Vérifier les limites d'utilisation ===
     today = datetime.utcnow()
     usage = db.query(UsageLog).filter(
         UsageLog.user_id == user.id,
@@ -556,25 +571,39 @@ async def upload_pdf(
     limits = {
         'free': 5,
         'premium': 50,
-        'pro': None
+        'pro': None  # Illimité
     }
 
     user_limit = limits.get(user.subscription_tier, 5)
 
     if user_limit and usage.uploads_count >= user_limit:
+        logger.warning(f"⚠️ Limite atteinte pour {email}: {usage.uploads_count}/{user_limit}")
         raise HTTPException(
             status_code=403,
-            detail=f"Limite de {user_limit} uploads atteinte ce mois-ci. Passez Premium !"
+            detail=f"Limite de {user_limit} uploads atteinte ce mois-ci. Passez Premium pour continuer !"
         )
 
     # === EXTRACTION avec le bon parser ===
-    transactions, _ = extract_from_pdf(pdf_bytes)
+    logger.info(f"🔄 Extraction des transactions...")
+    transactions, _ = extract_from_pdf(pdf_bytes, enable_debug=False)
+
+    if not transactions or len(transactions) == 0:
+        logger.error(f"❌ Aucune transaction extraite du PDF")
+        raise HTTPException(
+            status_code=400, 
+            detail="Aucune transaction trouvée dans ce relevé. Vérifiez le format du PDF."
+        )
+
+    logger.info(f"✅ {len(transactions)} transactions extraites")
+
+    # === GÉNÉRATION DU FICHIER EXCEL ===
     excel_bytes = generate_excel(transactions)
 
     if not excel_bytes:
-        raise HTTPException(status_code=400, detail="No transactions found")
+        logger.error(f"❌ Erreur génération Excel")
+        raise HTTPException(status_code=400, detail="Erreur lors de la génération du fichier Excel")
 
-    # Sauvegarder
+    # === SAUVEGARDER dans la base de données ===
     new_upload = Upload(
         user_id=user.id,
         filename=file.filename,
@@ -588,14 +617,20 @@ async def upload_pdf(
     db.commit()
     db.refresh(new_upload)
 
-    logger.info(f"✅ Conversion successful - User: {email}, Bank: {bank_type}, Transactions: {len(transactions)}")
+    logger.info("=" * 80)
+    logger.info(f"✅ CONVERSION RÉUSSIE")
+    logger.info(f"   User: {email}")
+    logger.info(f"   Bank: {bank_type}")
+    logger.info(f"   Transactions: {len(transactions)}")
+    logger.info(f"   Usage: {usage.uploads_count}/{user_limit if user_limit else '∞'}")
+    logger.info("=" * 80)
 
     return UploadResponse(
         upload_id=str(new_upload.id),
         status="success",
         transactions_count=len(transactions),
         bank_detected=bank_type,
-        message=f"{len(transactions)} transactions extraites ({usage.uploads_count}/{user_limit if user_limit else '∞'} ce mois)"
+        message=f"✅ {len(transactions)} transactions extraites avec succès ! ({usage.uploads_count}/{user_limit if user_limit else '∞'} ce mois)"
     )
 
 # ============================================================================
