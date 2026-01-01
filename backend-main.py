@@ -1308,6 +1308,10 @@ class SupportContactRequest(BaseModel):
     subject: str
     message: str
 
+# ============================================================================
+# SUPPORT - DISCORD NOTIFICATION
+# ============================================================================
+
 async def send_discord_support_message(support_data: dict):
     """
     Envoie un message de support vers Discord
@@ -1318,7 +1322,7 @@ async def send_discord_support_message(support_data: dict):
         logger.warning("⚠️ Discord webhook non configuré")
         return
     
-    # Créer l'embed avec les informations du message
+    # Créer l'embed
     embed = {
         "embeds": [{
             "title": "💬 Nouveau message de support",
@@ -1337,7 +1341,7 @@ async def send_discord_support_message(support_data: dict):
                 },
                 {
                     "name": "📌 Sujet",
-                    "value": support_data['subject'][:256],  # Limite Discord
+                    "value": support_data['subject'][:256],
                     "inline": False
                 },
                 {
@@ -1363,6 +1367,10 @@ async def send_discord_support_message(support_data: dict):
                     logger.error(f"❌ Erreur Discord webhook: status {resp.status}: {error_text}")
     except Exception as e:
         logger.error(f"❌ Erreur lors de l'envoi Discord: {str(e)}")
+
+# ============================================================================
+# SUPPORT - ENDPOINT
+# ============================================================================
 
 
 @app.post("/support/contact")
