@@ -1299,6 +1299,118 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
 
     return {"status": "success"}
 
+
+# ============================================================================
+# SUPPORT - CONTACT FORM
+# ============================================================================
+
+class SupportContactRequest(BaseModel):
+    subject: str
+    message: str
+
+async def send_discord_support_message(support_data: dict):
+    """
+    Envoie un message de support vers Discord
+    """
+    DISCORD_WEBHOOK_URL = os.getenv('DISCORD_WEBHOOK_URL')
+    
+    if not DISCORD_WEBHOOK_URL:
+        logger.warning("⚠️ Discord webhook non configuré")
+        return
+    
+    # Créer l'embed avec les informations du message
+    embed = {
+        "embeds": [{
+            "title": "💬 Nouveau message de support",
+            "description": "Un utilisateur a envoyé un message via le formulaire de contact",
+            "color": 5793266,  # Bleu
+            "fields": [
+                {
+                    "name": "👤 Utilisateur",
+                    "value": support_data['user_email'],
+                    "inline": True
+                },
+                {
+                    "name": "📋 Plan",
+                    "value": support_data['subscription_tier'].upper(),
+                    "inline": True
+                },
+                {
+                    "name": "📌 Sujet",
+                    "value": support_data['subject'][:256],  # Limite Discord
+                    "inline": False
+                },
+                {
+                    "name": "💬 Message",
+                    "value": support_data['message'][:1024] if len(support_data['message']) <= 1024 else support_data['message'][:1021] + "...",
+                    "inline": False
+                }
+            ],
+            "footer": {
+                "text": "ComptaFlow - Support"
+            },
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }]
+    }
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(DISCORD_WEBHOOK_URL, json=embed) as resp:
+                if resp.status == 204:
+                    logger.info(f"✅ Message de support envoyé sur Discord pour {support_data['user_email']}")
+                else:
+                    error_text = await resp.text()
+                    logger.error(f"❌ Erreur Discord webhook: status {resp.status}: {error_text}")
+    except Exception as e:
+        logger.error(f"❌ Erreur lors de l'envoi Discord: {str(e)}")
+
+
+@app.post("/support/contact")
+async def support_contact(
+    request: SupportContactRequest,
+    email: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Endpoint pour recevoir les messages du formulaire de support
+    Envoie une notification Discord
+    """
+    user = db.query(User).filter(User.email == email).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    
+    logger.info(f"📧 Support message from {email}: {request.subject}")
+    
+    # Préparer les données pour Discord
+    support_data = {
+        'user_email': user.email,
+        'user_name': user.full_name or 'Non renseigné',
+        'subscription_tier': user.subscription_tier,
+        'subject': request.subject,
+        'message': request.message
+    }
+    
+    # Envoyer la notification Discord
+    await send_discord_support_message(support_data)
+    
+    # TODO (optionnel) : Enregistrer le message en base de données
+    # support_ticket = SupportTicket(
+    #     user_id=user.id,
+    #     subject=request.subject,
+    #     message=request.message,
+    #     status='pending',
+    #     created_at=datetime.now(timezone.utc)
+    # )
+    # db.add(support_ticket)
+    # db.commit()
+    
+    return {
+        "success": True,
+        "message": "Message reçu ! Notre équipe vous répondra sous 24h."
+    }
+
+
+
 # ============================================================================
 # HEALTH CHECK
 # ============================================================================
